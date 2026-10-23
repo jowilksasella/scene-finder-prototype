@@ -1,0 +1,887 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dual-Timeline Scrubbing · SM2291</title>
+  <!-- Dual-timeline technique (full bar + frozen local bar) and a small-preview baseline.
+       Free play is logged unscored; study mode runs cued, scored trials. Nothing is stored. -->
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #05060a; --surface: #0d0f16; --surface-2: #141724; --line: #222637; --line-soft: #ffffff14;
+      --ink: #f3f5fa; --muted: #8b91a5; --dim: #5d6378;
+      --coarse: #3be8ff; --coarse-glow: #3be8ff66;
+      --fine: #ff5ac8; --fine-glow: #ff5ac866;
+      --radius: 18px;
+      --sans: "Segoe UI Variable Display", "Segoe UI", "SF Pro Display", system-ui, sans-serif;
+      --mono: "Cascadia Mono", "SF Mono", Consolas, monospace;
+      --spring: cubic-bezier(.2, 1.3, .35, 1);
+      font-family: var(--sans);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; color: var(--ink);
+      background: radial-gradient(1200px 600px at 50% -10%, #1b1f3a 0%, transparent 60%), var(--bg);
+    }
+    .workbench { height: 100vh; height: 100dvh; overflow-y: auto; overflow-x: hidden; scrollbar-gutter: stable; }
+    button, input, select { font: inherit; color: inherit; }
+    button { cursor: pointer; border: 1px solid var(--line); background: var(--surface-2); border-radius: 999px; padding: 8px 16px; font-size: 13px; font-weight: 600; transition: background .15s, border-color .15s, transform .15s var(--spring); }
+    button:hover:not(:disabled) { border-color: #3a4058; background: #1b1f30; }
+    button:active:not(:disabled) { transform: scale(.96); }
+    button:disabled { opacity: .35; cursor: default; }
+    button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--coarse); outline-offset: 3px; }
+    .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+    [hidden] { display: none !important; }
+
+    /* Top bar */
+    .topbar { max-width: 1120px; margin: auto; padding: 18px 28px 0; display: flex; align-items: center; gap: 18px; }
+    .brand { display: flex; align-items: center; gap: 10px; margin-right: auto; }
+    .brand-mark { width: 22px; height: 22px; border-radius: 7px; background: conic-gradient(from 200deg, var(--coarse), var(--fine), var(--coarse)); box-shadow: 0 0 18px var(--coarse-glow); }
+    .brand strong { font-size: 17px; font-weight: 700; letter-spacing: -.01em; }
+    .brand span { font: 11px var(--mono); color: var(--dim); }
+    .condition-buttons { display: flex; padding: 3px; gap: 2px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); }
+    .condition-buttons button { border: 0; background: transparent; color: var(--muted); padding: 7px 15px; }
+    .condition-buttons button.chosen { background: var(--ink); color: #07080c; }
+    .condition-buttons button.chosen[data-condition-choice="dual"] { box-shadow: 0 0 20px var(--coarse-glow); }
+
+    main { max-width: 1120px; margin: auto; padding: 0 28px 40px; }
+    .intro { display: flex; align-items: baseline; gap: 14px; padding: 26px 2px 14px; flex-wrap: wrap; }
+    h1 { font-size: 28px; line-height: 1.1; margin: 0; font-weight: 750; letter-spacing: -.02em; }
+    .intro p { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.5; flex: 1 1 320px; }
+    .mode-pill { font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 4px 10px; }
+    body[data-app-mode="study"] .mode-pill { color: var(--fine); border-color: var(--fine); }
+
+    /* Player */
+    .player { position: relative; border-radius: var(--radius); overflow: hidden; background: #000; box-shadow: 0 30px 80px -30px #000, 0 0 0 1px var(--line-soft); }
+    .preview { position: relative; aspect-ratio: var(--media-aspect, 854 / 480); background: #000; overflow: hidden; }
+    #previewVideo, #committedVideo { position: absolute; inset: 0; width: 100%; height: 100%; min-width: 0; min-height: 0; object-fit: contain; background: transparent; }
+    .chip { position: absolute; z-index: 3; font-size: 11px; font-weight: 600; color: #e7eaf3; padding: 5px 10px; border-radius: 999px; background: #0a0c14a8; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); border: 1px solid var(--line-soft); transition: opacity .2s; }
+    .stage-note { left: 16px; top: 16px; display: flex; align-items: center; gap: 7px; }
+    .stage-note::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--coarse); box-shadow: 0 0 10px var(--coarse); }
+    body[data-mode="fine"] .stage-note::before { background: var(--fine); box-shadow: 0 0 10px var(--fine); }
+    .frame-readout { right: 16px; top: 16px; font-family: var(--mono); font-weight: 500; }
+    .committed-readout { left: 16px; top: 50px; font-weight: 500; }
+    .seek-message { left: 16px; top: 50px; color: var(--fine); }
+    body[data-condition="baseline"] .seek-message { top: 84px; }
+    .load-message { position: absolute; inset: 0; z-index: 5; display: grid; place-items: center; background: var(--bg); text-align: center; padding: 20px; font-size: 14px; color: var(--muted); }
+
+    /* Overlay controls */
+    .player-controls {
+      position: absolute; z-index: 4; left: 0; right: 0; bottom: 0; padding: 70px 22px 14px;
+      background: linear-gradient(to bottom, #05060a00, #05060acc 45%, #05060af2);
+      opacity: 0; transform: translateY(8px); pointer-events: none;
+      transition: opacity .22s ease, transform .3s var(--spring);
+    }
+    body[data-controls-visible="true"] .player-controls { opacity: 1; transform: none; pointer-events: auto; }
+    .toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+    .toolbar-left { display: flex; align-items: center; gap: 12px; }
+    #playButton { padding: 5px 14px; font-size: 12px; background: #ffffff14; border-color: transparent; }
+    .time { font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 18px; font-weight: 600; letter-spacing: -.02em; white-space: nowrap; }
+    .duration { font-size: 13px; color: var(--muted); font-weight: 400; margin-left: 4px; }
+    .mode { font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--coarse); transition: color .2s; }
+    body[data-mode="fine"] .mode { color: var(--fine); }
+    body[data-mode="idle"] .mode { color: var(--muted); }
+
+    .scrub-deck { user-select: none; -webkit-user-select: none; touch-action: none; }
+    .axis-heading { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; font-size: 11px; color: var(--muted); height: 16px; }
+    .axis-heading strong { color: #d5d9e6; font-weight: 600; }
+    .axis { position: relative; height: 24px; cursor: ew-resize; touch-action: none; }
+    .rail { position: absolute; left: 0; right: 0; top: 9px; height: 6px; border-radius: 999px; background: #ffffff26; transition: height .15s, top .15s; }
+    .fill { position: absolute; left: 0; top: 9px; height: 6px; border-radius: 999px; background: linear-gradient(90deg, #1aa9c4, var(--coarse)); box-shadow: 0 0 14px var(--coarse-glow); pointer-events: none; transition: height .15s, top .15s; }
+    #seekAxis:hover .rail, #seekAxis:hover .fill, body[data-dragging="true"] #seekAxis .rail, body[data-dragging="true"] #seekAxis .fill { top: 7px; height: 10px; }
+    .needle { position: absolute; top: 3px; width: 18px; height: 18px; border-radius: 50%; background: #fff; transform: translateX(-50%); box-shadow: 0 0 0 4px var(--coarse-glow), 0 0 22px var(--coarse); pointer-events: none; transition: transform .2s var(--spring); }
+    body[data-dragging="true"] #seekAxis .needle { transform: translateX(-50%) scale(1.15); }
+    .axis-labels { display: flex; justify-content: space-between; height: 14px; font: 10px/1.4 var(--mono); color: var(--dim); }
+    .local-window { position: absolute; top: 2px; height: 20px; border-radius: 6px; border: 2px solid var(--fine); background: #ff5ac826; box-shadow: 0 0 18px var(--fine-glow); pointer-events: none; }
+
+    .fine-zone { position: relative; margin: 8px -10px 10px; padding: 8px 10px 4px; min-height: 64px; border-radius: 12px; border: 1px dashed #ffffff26; transition: border-color .2s, background .2s, box-shadow .2s; }
+    .fine-zone.active { border: 1px solid #ff5ac899; background: #ff5ac812; box-shadow: inset 0 0 30px #ff5ac814, 0 0 26px #ff5ac81f; }
+    .fine-title { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; height: 16px; font-size: 11px; color: var(--muted); }
+    .fine-title strong { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .fine-title span { font-family: var(--mono); font-size: 10px; flex-shrink: 0; }
+    .fine-zone.active .fine-title { color: var(--fine); }
+    .fine-guide { display: none; }
+    #localAxis { cursor: default; transform-origin: left center; }
+    #localAxis .fill { background: linear-gradient(90deg, #b83790, var(--fine)); box-shadow: 0 0 14px var(--fine-glow); }
+    #localAxis .needle { box-shadow: 0 0 0 4px var(--fine-glow), 0 0 22px var(--fine); }
+    .fine-zone:not(.active) #localAxis { opacity: .45; }
+
+    .strip-heading { display: flex; justify-content: space-between; gap: 12px; font-size: 10px; color: var(--dim); margin-bottom: 6px; }
+    body[data-condition="baseline"] .strip-heading { margin-top: 12px; }
+    .filmstrip { display: grid; grid-template-columns: repeat(var(--thumb-count, 9), minmax(0, 1fr)); gap: 6px; }
+    .filmstrip figure { margin: 0; min-width: 0; opacity: .6; transition: opacity .2s, transform .25s var(--spring); }
+    .filmstrip canvas { display: block; width: 100%; height: 38px; object-fit: cover; border-radius: 6px; border: 1px solid #ffffff1f; background: #0b0d14; }
+    .filmstrip figcaption { font: 9px/1.6 var(--mono); color: var(--dim); text-align: center; }
+    .filmstrip figure.is-current { opacity: 1; transform: translateY(-3px) scale(1.06); }
+    .filmstrip figure.is-current canvas { border-color: var(--coarse); box-shadow: 0 0 14px var(--coarse-glow); }
+    body[data-mode="fine"] .filmstrip figure.is-current canvas { border-color: var(--fine); box-shadow: 0 0 14px var(--fine-glow); }
+
+    /* Baseline: small floating live preview while dragging */
+    body[data-condition="baseline"] #previewVideo {
+      inset: auto; left: var(--preview-x, 50%); bottom: var(--preview-bottom, 160px);
+      width: 220px; height: 124px; transform: translateX(-50%); z-index: 6;
+      border: 2px solid #ffffffd9; border-radius: 10px; background: #000; box-shadow: 0 10px 30px #000c, 0 0 20px var(--coarse-glow);
+      pointer-events: none;
+    }
+    body[data-condition="baseline"][data-dragging="false"] #previewVideo { visibility: hidden; }
+
+    /* Study mode */
+    .trial-curtain { position: absolute; inset: 0; z-index: 12; display: grid; place-content: center; gap: 8px; text-align: center; padding: 24px; background: var(--bg); color: var(--ink); font-size: 18px; font-weight: 650; }
+    .trial-curtain p { margin: 0; color: var(--muted); font-size: 13px; font-weight: 400; }
+    .cue-banner { position: absolute; z-index: 11; left: 50%; top: 16px; transform: translateX(-50%); padding: 8px 16px; border-radius: 999px; background: #0a0c14cc; backdrop-filter: blur(10px); border: 1px solid var(--line-soft); font-size: 14px; font-weight: 600; white-space: nowrap; }
+    #cueCountdown { font-family: var(--mono); color: var(--fine); }
+    body[data-app-mode="study"][data-trial-block="true"] .player-controls { opacity: 0 !important; pointer-events: none !important; }
+    body[data-app-mode="study"][data-trial-block="true"] :is(.frame-readout, .committed-readout, .seek-message, .stage-note) { visibility: hidden; }
+    body[data-app-mode="study"]:is([data-study-phase="cue_loading"], [data-study-phase="cue"], [data-study-phase="start_loading"]) #previewVideo {
+      inset: 0; width: 100%; height: 100%; transform: none; visibility: visible; z-index: 1; border: 0; border-radius: 0; box-shadow: none;
+    }
+    body[data-app-mode="study"]:is([data-study-phase="cue_loading"], [data-study-phase="cue"], [data-study-phase="start_loading"]) #committedVideo { visibility: hidden; }
+    /* Keep study trials calm: no hover growth or thumbnail motion while a trial runs. */
+    body[data-app-mode="study"] :is(.player-controls, .filmstrip figure, .rail, .fill, .needle) { transition: none; }
+
+    .bottom-note { display: flex; justify-content: space-between; gap: 20px; padding: 12px 4px 0; font-size: 12px; color: var(--muted); }
+    .bottom-note a { color: var(--muted); }
+    .study-bar { display: none; align-items: center; gap: 12px; margin-top: 16px; padding: 12px 14px 12px 18px; border-radius: 14px; background: var(--surface); border: 1px solid var(--line); }
+    body[data-app-mode="study"] .study-bar, body:has(#exportTrials:not(:disabled)) .study-bar { display: flex; }
+    #studyStatus { margin: 0 auto 0 0; font-size: 13px; color: #c9cede; line-height: 1.5; }
+    #nextTrial:not(:disabled) { background: var(--ink); color: #07080c; border-color: var(--ink); }
+
+    /* Experimenter drawer */
+    .lab { margin-top: 26px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); }
+    body[data-app-mode="study"] .lab { display: none; }
+    .lab > summary { list-style: none; cursor: pointer; padding: 14px 18px; display: flex; align-items: center; gap: 10px; font-size: 13px; font-weight: 600; color: #c9cede; }
+    .lab > summary::-webkit-details-marker { display: none; }
+    .lab > summary::before { content: "⚙"; color: var(--muted); }
+    .lab > summary span { margin-left: auto; font-weight: 400; color: var(--dim); font-size: 12px; }
+    .lab-body { padding: 0 18px 18px; display: grid; gap: 18px; }
+    .lab-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; font-size: 13px; color: var(--muted); }
+    .lab-row label { display: flex; align-items: center; gap: 8px; }
+    input, select { padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; background: #090b11; }
+    #participantId { width: 110px; }
+    #startStudy:not(:disabled) { background: linear-gradient(90deg, var(--coarse), var(--fine)); color: #07080c; border: 0; }
+    .task-settings { border: 1px solid var(--line); border-radius: 10px; font-size: 12px; }
+    .task-settings summary { cursor: pointer; padding: 10px 12px; color: #c9cede; }
+    .task-settings p { color: var(--muted); margin: 0 12px 12px; line-height: 1.6; font-size: 12px; }
+    .task-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; padding: 0 12px 14px; }
+    .task-grid label { display: flex; flex-direction: column; gap: 5px; color: var(--muted); font-size: 11px; }
+    .task-grid input, .task-grid select { width: 100%; min-width: 0; }
+    #mediaScaleNote { color: var(--fine); }
+    .records-heading { display: flex; justify-content: space-between; gap: 15px; align-items: center; margin-bottom: 8px; }
+    .records h2 { font-size: 14px; margin: 0 0 3px; font-weight: 650; }
+    #recordCount, #trialRecordCount { font-family: var(--mono); color: var(--coarse); margin-left: 6px; }
+    .records p { margin: 0; color: var(--dim); font-size: 11px; }
+    .table-scroll { overflow-x: auto; }
+    table { border-collapse: collapse; width: 100%; min-width: 560px; font-size: 12px; text-align: left; }
+    th { color: var(--dim); font-weight: 500; }
+    th, td { padding: 8px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+    td { font-variant-numeric: tabular-nums; color: #c9cede; }
+
+    @media (max-width: 760px) {
+      .topbar { padding: 14px 16px 0; flex-wrap: wrap; gap: 10px; }
+      main { padding: 0 16px 28px; }
+      h1 { font-size: 22px; }
+      .intro p { font-size: 12px; }
+      .player-controls { padding: 40px 12px 8px; }
+      .time { font-size: 14px; }
+      .filmstrip canvas { height: 26px; }
+      .chip { font-size: 10px; }
+      body[data-condition="baseline"] #previewVideo { width: 160px; height: 90px; }
+      .task-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .study-bar { flex-wrap: wrap; }
+    }
+    @media (max-width: 460px) { .task-grid { grid-template-columns: 1fr; } }
+    @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; animation: none !important; } }
+  </style>
+</head>
+<body data-layout="overlay" data-condition="dual" data-mode="idle" data-dragging="false" data-controls-visible="false" data-app-mode="free" data-study-phase="idle" data-trial-block="false">
+  <div class="workbench" id="workbench">
+  <header class="topbar">
+    <div class="brand"><div class="brand-mark"></div><strong>Scene Finder</strong><span>SM2291</span></div>
+    <div class="condition-buttons" aria-label="Condition"><button data-condition-choice="dual" class="chosen">Dual timeline</button><button data-condition-choice="baseline">Baseline</button></div>
+    <button id="fileButton" class="file-button">Load video</button>
+    <input id="fileInput" type="file" accept="video/*" class="sr-only" tabindex="-1">
+  </header>
+  <main>
+    <section class="intro">
+      <h1 id="conditionTitle">Dual timeline</h1>
+      <span class="mode-pill" id="appModeLabel">Free play</span>
+      <p id="conditionDescription"></p>
+    </section>
+    <section class="player" aria-label="Video scene search prototype">
+      <div class="preview" id="previewStage">
+        <video id="committedVideo" muted playsinline preload="auto" aria-label="Committed frame (baseline)" hidden></video>
+        <video id="previewVideo" muted playsinline preload="auto" aria-label="Frame at the selected time"></video>
+        <div class="chip stage-note" id="stageNote">Live frame</div>
+        <div class="chip frame-readout" id="frameReadout">—</div>
+        <div class="chip committed-readout" id="committedReadout" hidden>—</div>
+        <div class="load-message" id="loadMessage">Loading video…</div>
+        <div class="chip seek-message" id="seekMessage" hidden>Updating frame…</div>
+        <div class="trial-curtain" id="trialCurtain" hidden><strong id="curtainMessage">Preparing cue…</strong><p id="curtainDetail">Frame not ready; no timer has started.</p></div>
+        <div class="cue-banner" id="cueBanner" hidden>Remember this frame · <span id="cueCountdown">5.0</span> s</div>
+      </div>
+      <div class="player-controls" id="playerControls">
+      <div class="toolbar">
+        <div class="toolbar-left"><button id="playButton" disabled>Play</button><div class="time"><span id="selectedTime">—</span><span class="duration">/ <span id="durationTime">—</span></span></div></div>
+        <span class="mode" id="modeLabel">Loading</span>
+      </div>
+      <div class="scrub-deck" id="scrubDeck">
+        <div class="axis-heading"><strong id="axisTitle">Full video</strong><span id="axisInstruction"></span></div>
+        <div class="axis" id="seekAxis" role="slider" aria-label="Selected video time" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0" aria-disabled="true" tabindex="0">
+          <div class="rail"></div><div class="local-window" id="overviewWindow" hidden></div><div class="fill" id="seekFill"></div><div class="needle" id="seekNeedle"></div>
+        </div>
+        <div class="axis-labels"><span id="rangeStart">—</span><span id="rangeMiddle"></span><span id="rangeEnd">—</span></div>
+        <div class="fine-zone" id="fineZone">
+          <div class="fine-title"><strong id="fineTitle">↓ Slide down to zoom in</strong><span id="fineRange">—</span></div>
+          <div id="fineGuide" class="fine-guide"><p id="fineExplanation"></p><span class="map" id="mappingLabel"></span></div>
+          <div id="localControls" hidden>
+            <div class="axis" id="localAxis" aria-label="Zoomed timeline"><div class="rail"></div><div class="fill" id="localFill"></div><div class="needle" id="localNeedle"></div></div>
+            <div class="axis-labels"><span id="localStart">—</span><span>Zoomed minute</span><span id="localEnd">—</span></div>
+          </div>
+        </div>
+        <div class="strip-heading"><span id="stripLabel">Thumbnails</span><span id="stripStatus">Loading thumbnails…</span></div>
+        <div class="filmstrip" id="filmstrip" aria-label="Video thumbnails in time order"></div>
+      </div>
+      </div>
+    </section>
+    <div class="bottom-note">
+      <span id="interactionHint"></span>
+      <span id="mediaCredit"></span>
+    </div>
+    <div class="study-bar" aria-label="Study controls">
+      <p id="studyStatus" role="status"></p>
+      <button id="nextTrial" disabled>Next trial</button><button id="exitStudy" disabled>Exit study</button><button id="exportTrials" disabled>Export trial CSV</button>
+    </div>
+    <details class="lab" id="labPanel">
+      <summary>Experimenter panel<span>study setup · logs</span></summary>
+      <div class="lab-body">
+        <div class="lab-row">
+          <label for="participantId">Participant ID <input id="participantId" value="DEMO" maxlength="80" autocomplete="off"></label>
+          <button id="startStudy" disabled>Start study</button>
+        </div>
+        <details class="task-settings" id="taskSettings">
+          <summary>Task settings</summary>
+          <p>Hidden and locked during a study. Alternative times (comma-separated) cover shots that appear more than once. Leave a start time empty to pick a position far from the target automatically.</p>
+          <div class="task-grid">
+            <label>Cue length (s)<input id="cueSeconds" type="number" min="0.5" max="30" step="0.5" value="5"></label>
+            <label>Relaxed tolerance (s)<input id="looseTolerance" type="number" min="0" step="0.1" value="5"></label>
+            <label>Precise tolerance (s)<input id="tightTolerance" type="number" min="0" step="0.1" value="2"></label>
+            <label>Scene 1 target (s)<input id="target1Seconds" type="number" min="0" step="any"></label>
+            <label>Scene 1 alternative times (s)<input id="alternate1Seconds" type="text" placeholder="optional, e.g. 120, 160"></label>
+            <label>Scene 1 start (s)<input id="start1Seconds" type="number" min="0" step="any" placeholder="auto"></label>
+            <label>Scene 2 target (s)<input id="target2Seconds" type="number" min="0" step="any"></label>
+            <label>Scene 2 alternative times (s)<input id="alternate2Seconds" type="text" placeholder="optional"></label>
+            <label>Scene 2 start (s)<input id="start2Seconds" type="number" min="0" step="any" placeholder="auto"></label>
+            <label>First condition<select id="firstConditionSelect"><option value="dual">Dual timeline</option><option value="baseline">Baseline</option></select></label>
+            <label>First precision<select id="firstPrecisionSelect"><option value="relaxed">Relaxed</option><option value="precise">Precise</option></select></label>
+          </div>
+          <p id="mediaScaleNote"></p>
+        </details>
+        <section class="records" id="freeRecords" aria-label="Free play log">
+          <div class="records-heading"><div><h2>Free play log <span id="recordCount">0</span></h2><p id="recordNote">Each press-to-release drag; not scored.</p></div><button id="exportButton" disabled>Export CSV</button></div>
+          <div class="table-scroll"><table><thead><tr><th>#</th><th>ID</th><th>Condition</th><th>Duration</th><th>Selected time</th><th>Ended by</th></tr></thead><tbody id="recordRows"><tr><td colspan="6">No drags yet.</td></tr></tbody></table></div>
+        </section>
+        <section class="records trial-records" aria-label="Trial log">
+          <div class="records-heading"><div><h2>Trial log <span id="trialRecordCount">0</span></h2><p>Target times and errors are only in the exported CSV, never shown to the participant.</p></div></div>
+          <div class="table-scroll"><table><thead><tr><th>Session / trial</th><th>Condition</th><th>Precision</th><th>Drag time</th><th>Task time</th><th>Result</th></tr></thead><tbody id="trialRows"><tr><td colspan="6">No finished trials yet.</td></tr></tbody></table></div>
+        </section>
+      </div>
+    </details>
+  </main>
+  </div>
+  <video id="thumbnailVideo" muted playsinline preload="auto" hidden></video>
+  <script src="assets/media.js"></script>
+  <script src="interaction-log.js"></script>
+  <script src="trial-engine.js"></script>
+  <script>
+  (() => {
+    'use strict';
+    const $ = id => document.getElementById(id);
+    const video = $('previewVideo'), committedVideo = $('committedVideo'), thumbnailVideo = $('thumbnailVideo');
+    const sample = window.PROTOTYPE_MEDIA || null;
+    const log = window.SM2291Log.create();
+    const study = window.SM2291Study.create();
+    let appMode = 'free', studyEpoch = 0, cueTimer = null, frameWaitCancel = null;
+    let condition = new URLSearchParams(location.search).get('condition') === 'baseline' ? 'baseline' : 'dual';
+    let source = sample, localUrl = null, ready = false, mediaEpoch = 0;
+    let duration = 0, selected = 0, actual = 0, mode = 'idle', drag = null;
+    let desired = 0, busy = false, frameStatus = 'loading', fineWindow = { start: 0, end: 0 };
+    let committedDesired = 0, committedActual = 0, committedBusy = false;
+    let stripGeneration = 0, stripRangeKey = '', stripEntries = [], thumbnailPending = null, thumbnailWorking = false;
+    const spriteImages = new Map();
+    const studyPhasesThatSearch = ['armed', 'active'];
+    function trialBlockControls() { return appMode === 'study' && !studyPhasesThatSearch.includes(study.state().phase); }
+    // Activity-only HUD policy. Media/render/log updates never call this block.
+    const player = document.querySelector('.player'), controlGroup = $('playerControls');
+    const controlsIdleMs = 2000;
+    let controlsVisible = false, controlsHideTimer = null, inputModality = 'none';
+    function keyboardControlsFocused() {
+      const focused = document.activeElement;
+      return inputModality !== 'mouse' && document.hasFocus() && !!focused && controlGroup.contains(focused) && focused.matches(':focus-visible');
+    }
+    function clearControlsTimer() {
+      if (controlsHideTimer !== null) clearTimeout(controlsHideTimer);
+      controlsHideTimer = null;
+    }
+    function setControlsVisible(visible) {
+      controlsVisible = visible;
+      document.body.dataset.controlsVisible = String(visible);
+    }
+    function controlsActivity() {
+      if (trialBlockControls()) { resetControls(); return; }
+      clearControlsTimer(); setControlsVisible(true);
+      if (drag || keyboardControlsFocused()) return;
+      controlsHideTimer = setTimeout(() => {
+        controlsHideTimer = null;
+        if (!drag && !keyboardControlsFocused()) setControlsVisible(false);
+      }, controlsIdleMs);
+    }
+    function resetControls() {
+      clearControlsTimer(); setControlsVisible(false);
+    }
+    for (const eventName of ['pointerenter', 'pointermove']) {
+      player.addEventListener(eventName, event => { if (event.pointerType === 'mouse') controlsActivity(); });
+    }
+    document.addEventListener('pointerdown', event => {
+      if (event.pointerType !== 'mouse') return;
+      inputModality = 'mouse';
+      if (controlsVisible) controlsActivity();
+    }, true);
+    document.addEventListener('keydown', () => {
+      inputModality = 'keyboard';
+      if (player.contains(document.activeElement)) controlsActivity();
+    }, true);
+    controlGroup.addEventListener('focusin', controlsActivity);
+    controlGroup.addEventListener('focusout', () => queueMicrotask(controlsActivity));
+    // End activity-only HUD policy.
+    const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+    const fmt = (t, decimals = false) => {
+      if (!Number.isFinite(t)) return '—';
+      const millis = Math.max(0, Math.floor(t * 1000));
+      const total = Math.floor(millis / 1000), h = Math.floor(total / 3600), m = Math.floor(total / 60) % 60, s = total % 60;
+      const base = (h ? String(h) + ':' : '') + String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
+      return base + (decimals ? '.' + String(millis % 1000).padStart(3, '0') : '');
+    };
+    const localRange = time => {
+      const span = Math.min(60, duration), start = clamp(time - span / 2, 0, Math.max(0, duration - span));
+      return { start, end: start + span };
+    };
+    const isFine = () => condition === 'dual' && mode === 'fine';
+    const stripRange = () => isFine() ? fineWindow : { start: 0, end: duration };
+    const position = (t, range) => range.end > range.start ? clamp((t - range.start) / (range.end - range.start), 0, 1) * 100 : 0;
+    const previewPending = () => busy || video.seeking || frameStatus === 'seeking' || Math.abs(actual - selected) >= .003;
+    const playbackVideo = () => condition === 'baseline' ? committedVideo : video;
+    const reasonLabels = { release: 'release', pointercancel: 'pointer cancelled', lostpointercapture: 'lost pointer capture', blur: 'window lost focus', resize: 'window resized', media_error: 'video error', media_change: 'video changed' };
+    const conditionName = c => c === 'baseline' ? 'Baseline' : 'Dual timeline';
+    const precisionName = p => p === 'precise' ? 'Precise' : 'Relaxed';
+
+    function renderRecords() {
+      const rows = log.rows();
+      $('recordCount').textContent = String(rows.length);
+      $('exportButton').disabled = !!drag || !rows.length;
+      $('recordRows').replaceChildren();
+      if (!rows.length) {
+        const tr = document.createElement('tr'), td = document.createElement('td');
+        td.colSpan = 6; td.textContent = 'No drags yet. Press and drag on the video timeline to start.'; tr.append(td); $('recordRows').append(tr); return;
+      }
+      for (const row of rows.slice(-8).reverse()) {
+        const tr = document.createElement('tr');
+        const reason = row.reason;
+        const values = [row.interaction_number, row.participant_id, conditionName(row.condition), (Number(row.duration_ms) / 1000).toFixed(2) + ' s', fmt(row.end_selected_time_sec, true), (row.result_status === 'aborted' ? 'cancelled · ' : '') + (reasonLabels[reason] || reason)];
+        values.forEach(value => { const td = document.createElement('td'); td.textContent = String(value ?? ''); tr.append(td); });
+        $('recordRows').append(tr);
+      }
+      $('recordNote').textContent = 'Showing the last 8 drags; the CSV contains all. Not scored.';
+    }
+
+    function renderState() {
+      const sessionLocked = appMode === 'study', block = trialBlockControls();
+      document.body.dataset.appMode = appMode; document.body.dataset.studyPhase = study.state().phase; document.body.dataset.trialBlock = String(block);
+      controlGroup.inert = block; $('taskSettings').inert = sessionLocked; $('freeRecords').inert = sessionLocked;
+      for (const id of ['frameReadout', 'committedReadout', 'seekMessage', 'stageNote']) $(id).inert = block;
+      $('taskSettings').querySelectorAll('input, select').forEach(input => input.disabled = sessionLocked);
+      if (block && controlsVisible) resetControls();
+      document.body.dataset.condition = condition;
+      document.body.dataset.mode = mode;
+      document.body.dataset.dragging = String(!!drag);
+      $('selectedTime').textContent = ready ? fmt(selected, true) : '—';
+      $('durationTime').textContent = ready ? fmt(duration) : '—';
+      $('frameReadout').textContent = !ready ? '—' : fmt(condition === 'baseline' && !drag ? committedActual : actual, true);
+      $('committedReadout').hidden = condition !== 'baseline';
+      $('committedReadout').textContent = drag ? 'Let go to jump here' : committedBusy ? 'Jumping…' : 'At ' + fmt(committedActual);
+      $('modeLabel').textContent = !ready ? 'Loading' : mode === 'fine' ? 'Fine-tuning' : mode === 'coarse' ? 'Scrubbing' : 'Ready';
+      $('seekMessage').hidden = frameStatus !== 'seeking' || (condition === 'baseline' && !drag);
+      $('seekMessage').textContent = 'Updating preview · last frame ' + fmt(actual, true);
+      $('seekAxis').setAttribute('aria-valuemax', String(duration));
+      $('seekAxis').setAttribute('aria-valuenow', selected.toFixed(3));
+      $('seekAxis').setAttribute('aria-valuetext', fmt(selected, true));
+      $('seekAxis').setAttribute('aria-disabled', String(!ready));
+      $('playButton').disabled = !ready || !!drag || sessionLocked;
+      $('playButton').textContent = playbackVideo().paused ? 'Play' : 'Pause';
+      $('fileButton').disabled = !!drag || sessionLocked; $('participantId').disabled = !!drag || sessionLocked;
+      $('exportButton').disabled = !!drag || sessionLocked || !log.rows().length;
+      document.querySelectorAll('[data-condition-choice]').forEach(button => button.disabled = !!drag || sessionLocked);
+      $('fineZone').classList.toggle('active', isFine());
+      $('fineTitle').textContent = isFine() ? 'Zoomed in · slide up to zoom out' : '↓ Slide down to zoom in';
+      const range = { start: 0, end: duration }, pct = position(selected, range);
+      $('seekFill').style.width = pct + '%'; $('seekNeedle').style.left = pct + '%';
+      $('rangeStart').textContent = ready ? fmt(0) : '—'; $('rangeEnd').textContent = ready ? fmt(duration) : '—';
+      $('axisTitle').textContent = 'Full video';
+      $('axisInstruction').textContent = isFine() ? 'Overview stays put' : 'Hold & drag to scrub';
+      $('fineRange').textContent = ready ? 'Window ' + fmt(fineWindow.start) + '–' + fmt(fineWindow.end) : '—';
+      const localPct = position(selected, fineWindow);
+      $('localFill').style.width = localPct + '%'; $('localNeedle').style.left = localPct + '%';
+      $('localStart').textContent = ready ? fmt(fineWindow.start) : '—'; $('localEnd').textContent = ready ? fmt(fineWindow.end) : '—';
+      $('overviewWindow').hidden = !isFine();
+      $('overviewWindow').style.left = position(fineWindow.start, range) + '%';
+      $('overviewWindow').style.width = (duration ? (fineWindow.end - fineWindow.start) / duration * 100 : 0) + '%';
+      if (stripEntries.length) {
+        let nearest = 0;
+        stripEntries.forEach((entry, i) => { if (Math.abs(entry.time - selected) < Math.abs(stripEntries[nearest].time - selected)) nearest = i; });
+        stripEntries.forEach((entry, i) => entry.figure.classList.toggle('is-current', i === nearest));
+      }
+    }
+
+    // Motion feedback only; same release pulse in both conditions, no effect on timing or mapping.
+    const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
+    function zoomInFeedback() {
+      if (reducedMotion.matches || !duration) return;
+      const left = fineWindow.start / duration, width = (fineWindow.end - fineWindow.start) / duration;
+      $('localAxis').animate([{ transform: `translateX(${left * 100}%) scaleX(${width})`, opacity: .3 }, { transform: 'none', opacity: 1 }], { duration: 280, easing: 'cubic-bezier(.2, 1.3, .35, 1)' });
+    }
+    function releaseFeedback() {
+      if (reducedMotion.matches) return;
+      $('seekNeedle').animate([{ boxShadow: '0 0 0 0 rgba(59, 232, 255, .7)' }, { boxShadow: '0 0 0 16px rgba(59, 232, 255, 0)' }], { duration: 450, easing: 'ease-out' });
+    }
+
+    function renderCondition() {
+      $('conditionTitle').textContent = conditionName(condition);
+      $('conditionDescription').textContent = condition === 'dual' ? 'Hold the bar to scrub. Keep holding and slide down to zoom into the nearby minute. Let go to land.' : 'Hold and drag the bar — a small preview follows you. Let go to jump there.';
+      $('interactionHint').textContent = 'Try it: remember a frame, scrub away, then find it again.';
+      $('fineZone').hidden = condition === 'baseline'; $('fineGuide').hidden = true; $('localControls').hidden = condition !== 'dual';
+      committedVideo.hidden = condition !== 'baseline';
+      $('stageNote').textContent = condition === 'dual' ? 'Live frame' : 'Live preview';
+      document.querySelectorAll('[data-condition-choice]').forEach(button => {
+        const chosen = button.dataset.conditionChoice === condition;
+        button.classList.toggle('chosen', chosen); button.setAttribute('aria-pressed', String(chosen));
+      });
+      renderState(); renderStrip(true); positionSmallPreview();
+    }
+    function changeCondition(key) {
+      if (drag || appMode === 'study' || !['dual', 'baseline'].includes(key) || key === condition) return;
+      video.pause(); committedVideo.pause(); condition = key; mode = 'idle'; fineWindow = localRange(selected);
+      const url = new URL(location.href); url.searchParams.delete('variant'); url.searchParams.set('condition', condition);
+      try { history.replaceState(null, '', url); } catch (_) {}
+      if (condition === 'baseline') queueCommit(selected);
+      desired = selected; flushSeek(); renderCondition(); controlsActivity();
+    }
+    function positionSmallPreview(pointerX) {
+      if (condition !== 'baseline') return;
+      const stage = $('previewStage').getBoundingClientRect(), smallWidth = innerWidth <= 760 ? 160 : 220;
+      const x = pointerX == null ? stage.width / 2 : pointerX - stage.left;
+      $('previewStage').style.setProperty('--preview-x', clamp(x, smallWidth / 2 + 8, Math.max(smallWidth / 2 + 8, stage.width - smallWidth / 2 - 8)) + 'px');
+      $('previewStage').style.setProperty('--preview-bottom', $('playerControls').offsetHeight + 8 + 'px');
+    }
+
+    function renderStudy() {
+      const state = study.state(), locked = appMode === 'study', block = trialBlockControls();
+      document.body.dataset.appMode = appMode; document.body.dataset.studyPhase = state.phase; document.body.dataset.trialBlock = String(block);
+      $('appModeLabel').textContent = locked ? 'Study' : 'Free play';
+      $('startStudy').disabled = locked || !ready || !!drag;
+      $('nextTrial').disabled = !locked || !['configured', 'complete', 'aborted'].includes(state.phase) || !!drag;
+      $('exitStudy').disabled = !locked;
+      $('exportTrials').disabled = !study.rows().length || !!drag || (locked && state.phase !== 'finished');
+      const current = study.currentTrial();
+      const prefix = !locked ? '' : state.phase === 'finished' ? 'Session ' + state.sessionNumber + ': ' : 'Trial ' + state.trialNumber + '/' + state.total + (current ? ' · ' + current.taskId : '') + ' · ' + conditionName(state.condition) + ' · ' + precisionName(state.precision) + ': ';
+      const messages = {
+        configured: 'Preparing the first cue.', cue_loading: 'Preparing the cue frame.',
+        cue: 'Remember this frame. The countdown is the cue time, not a video position.', start_loading: 'Cue hidden; preparing the start position.',
+        armed: 'Ready. Press the full bar to search for the frame; release once to answer.', active: 'Searching; releasing submits your answer.',
+        complete: 'Answer recorded. Press "Next trial" to continue.', aborted: 'Trial cancelled (not counted as wrong). Press "Next trial" to continue.',
+        finished: 'All trials finished. Export the trial CSV or exit the study.'
+      };
+      $('studyStatus').textContent = locked ? prefix + (messages[state.phase] || '') : 'Free play: drags are logged but not scored. Configure tasks, then start a study.';
+      $('cueBanner').hidden = !locked || state.phase !== 'cue';
+      if (state.phase === 'cue') $('cueCountdown').textContent = (Math.ceil(state.cueRemainingMs / 100) / 10).toFixed(1);
+      const rows = study.rows(); $('trialRecordCount').textContent = String(rows.length); $('trialRows').replaceChildren();
+      if (!rows.length) {
+        const tr = document.createElement('tr'), td = document.createElement('td'); td.colSpan = 6; td.textContent = 'No finished trials yet.'; tr.append(td); $('trialRows').append(tr);
+      }
+      for (const row of rows.slice(-12).reverse()) {
+        const tr = document.createElement('tr');
+        const durationText = value => value === '' || value == null ? 'not started' : (Number(value) / 1000).toFixed(2) + ' s';
+        const values = [row.session_number + ' / ' + row.trial_number, conditionName(row.condition), precisionName(row.precision), durationText(row.duration_ms), durationText(row.task_elapsed_ms), row.outcome];
+        values.forEach(value => { const td = document.createElement('td'); td.textContent = value; tr.append(td); }); $('trialRows').append(tr);
+      }
+      renderState();
+    }
+    function invalidateStudyAsync() {
+      studyEpoch += 1; if (cueTimer !== null) clearTimeout(cueTimer); cueTimer = null;
+      if (frameWaitCancel) frameWaitCancel();
+    }
+    function showCurtain(message, detail = 'Frame not ready; no timer has started.') {
+      $('curtainMessage').textContent = message; $('curtainDetail').textContent = detail; $('trialCurtain').hidden = false;
+    }
+    function waitForNativeFrame(time, epoch, includeCommitted = false) {
+      return new Promise((resolve, reject) => {
+        let poll = null, finished = false; const began = performance.now();
+        const cleanup = () => {
+          if (poll !== null) clearTimeout(poll);
+          for (const media of [video, committedVideo]) { media.removeEventListener('seeked', check); media.removeEventListener('loadeddata', check); media.removeEventListener('error', fail); }
+          if (frameWaitCancel === cancel) frameWaitCancel = null;
+        };
+        const done = error => { if (finished) return; finished = true; cleanup(); error ? reject(error) : resolve(); };
+        const cancel = () => done(new Error('cancelled'));
+        const fail = () => done(new Error('media_error'));
+        const frameReady = media => media.readyState >= 2 && !media.seeking && Math.abs(media.currentTime - time) <= .02;
+        function check() {
+          if (finished) return;
+          if (epoch !== studyEpoch || appMode !== 'study') { cancel(); return; }
+          if (ready && !busy && frameReady(video) && (!includeCommitted || (!committedBusy && frameReady(committedVideo)))) { done(); return; }
+          if (performance.now() - began > 10000) { done(new Error('frame_timeout')); return; }
+          if (poll !== null) clearTimeout(poll); poll = setTimeout(check, 50);
+        }
+        frameWaitCancel = cancel;
+        for (const media of [video, committedVideo]) { media.addEventListener('seeked', check); media.addEventListener('loadeddata', check); media.addEventListener('error', fail); }
+        check();
+      });
+    }
+    function trialDetails(rawRow) {
+      return { selectedTimeSec: selected, actualFrameTimeSec: actual, previewPending: previewPending(), modeSwitchCount: rawRow ? rawRow.mode_switch_count : 0, fineEntryCount: rawRow ? rawRow.fine_entry_count : 0 };
+    }
+    function cancelStudy(reason) {
+      if (appMode !== 'study') return;
+      if (drag) { endInteraction(reason); return; }
+      invalidateStudyAsync();
+      study.cancel(reason, trialDetails());
+      $('cueBanner').hidden = true; resetControls();
+      if (study.state().phase === 'aborted') showCurtain('Trial cancelled', 'The reason was recorded; this is not counted as wrong. Press "Next trial" to continue.');
+      renderStudy();
+    }
+    function interrupt(reason) { if (drag) endInteraction(reason); else if (appMode === 'study') cancelStudy(reason); }
+    function handleTrialLoadError(error, epoch) {
+      if (epoch !== studyEpoch || appMode !== 'study') return;
+      cancelStudy(error.message === 'media_error' ? 'media_error' : 'frame_timeout');
+      showCurtain('Frame could not be prepared; trial cancelled', 'No timer started and it is not counted as wrong.');
+    }
+    async function prepareStarter(epoch) {
+      const definition = study.currentTrial();
+      if (!definition || epoch !== studyEpoch) return;
+      showCurtain('Preparing start position…', 'Cue hidden; the task timer starts when the start frame is ready.'); $('cueBanner').hidden = true; renderStudy();
+      selectTime(definition.startTimeSec); if (condition === 'baseline') queueCommit(definition.startTimeSec);
+      try {
+        await waitForNativeFrame(definition.startTimeSec, epoch, condition === 'baseline');
+        if (epoch !== studyEpoch || appMode !== 'study' || !study.arm()) return;
+        $('trialCurtain').hidden = true; resetControls(); renderStudy();
+      } catch (error) { handleTrialLoadError(error, epoch); }
+    }
+    function scheduleCue(epoch) {
+      if (epoch !== studyEpoch || appMode !== 'study') return;
+      const state = study.state(); if (state.phase !== 'cue') return;
+      renderStudy();
+      if (state.cueRemainingMs <= 0 && study.cueHidden()) { cueTimer = null; prepareStarter(epoch); return; }
+      cueTimer = setTimeout(() => scheduleCue(epoch), Math.max(16, Math.min(100, state.cueRemainingMs || 16)));
+    }
+    async function prepareNextTrial() {
+      if (appMode !== 'study' || drag) return;
+      invalidateStudyAsync(); const epoch = studyEpoch, definition = study.nextTrial();
+      if (!definition) { $('trialCurtain').hidden = true; $('cueBanner').hidden = true; renderStudy(); return; }
+      condition = definition.condition; mode = 'idle'; video.pause(); committedVideo.pause();
+      resetControls(); showCurtain('Preparing cue…'); renderStudy(); renderCondition();
+      selectTime(definition.targetTimeSec);
+      try {
+        await waitForNativeFrame(definition.targetTimeSec, epoch);
+        if (epoch !== studyEpoch || appMode !== 'study' || !study.cueShown()) return;
+        $('trialCurtain').hidden = true; renderStudy(); scheduleCue(epoch);
+      } catch (error) { handleTrialLoadError(error, epoch); }
+    }
+    function numberSetting(id, optional = false) {
+      const input = $(id), text = input.value.trim();
+      if (!text && optional) return undefined;
+      const value = Number(text);
+      if (!text || !Number.isFinite(value) || value < 0 || !input.checkValidity()) throw new Error('check "' + input.parentElement.firstChild.textContent.trim() + '"');
+      return value;
+    }
+    function readTrialConfig() {
+      const targets = [1, 2].map(index => {
+        const text = $('alternate' + index + 'Seconds').value.trim();
+        const alternate = text ? text.split(/[，,;；]+/).map(part => { const value = Number(part.trim()); if (!part.trim() || !Number.isFinite(value) || value < 0) throw new Error('alternative times must be comma-separated seconds'); return value; }) : [];
+        return { id: 'scene-' + index, targetTimeSec: numberSetting('target' + index + 'Seconds'), acceptableTimesSec: alternate, startTimeSec: numberSetting('start' + index + 'Seconds', true) };
+      });
+      return { participantId: $('participantId').value.trim() || 'DEMO', mediaTitle: source ? source.title : 'local video', mediaDurationSec: duration,
+        cueDurationMs: numberSetting('cueSeconds') * 1000, relaxedToleranceSec: numberSetting('looseTolerance'), preciseToleranceSec: numberSetting('tightTolerance'), targets,
+        firstCondition: $('firstConditionSelect').value, firstPrecision: $('firstPrecisionSelect').value };
+    }
+    function beginStudy() {
+      if (!ready || drag || appMode === 'study') return;
+      try {
+        if (!study.beginSession(readTrialConfig())) return;
+        appMode = 'study'; $('taskSettings').open = false; video.pause(); committedVideo.pause(); resetControls(); renderStudy(); prepareNextTrial();
+      } catch (error) { $('studyStatus').textContent = 'Could not start: ' + error.message; }
+    }
+    function exitStudy() {
+      if (appMode !== 'study') return;
+      if (drag) endInteraction('exit'); invalidateStudyAsync(); study.exit('exit', trialDetails()); appMode = 'free';
+      $('trialCurtain').hidden = true; $('cueBanner').hidden = true; resetControls();
+      if (condition === 'baseline') queueCommit(selected); renderCondition(); renderStudy();
+    }
+    function populateTrialDefaults() {
+      $('target1Seconds').value = (duration * .3).toFixed(3); $('target2Seconds').value = (duration * .55).toFixed(3);
+      for (const id of ['alternate1Seconds', 'alternate2Seconds', 'start1Seconds', 'start2Seconds']) $(id).value = '';
+      for (const id of ['target1Seconds', 'target2Seconds', 'start1Seconds', 'start2Seconds']) $(id).max = String(duration);
+      $('mediaScaleNote').textContent = duration < 60 ? 'This video is shorter than 60 s, so the local window equals the whole video.' : '';
+    }
+
+    function flushSeek() {
+      if (!ready || busy || video.seeking) return;
+      if (Math.abs(video.currentTime - desired) < .003 && video.readyState >= 2) { actual = video.currentTime; frameStatus = 'ready'; renderState(); return; }
+      busy = true; frameStatus = 'seeking'; renderState();
+      try { video.currentTime = desired; } catch (_) { busy = false; showMediaError(); }
+    }
+    function selectTime(time) {
+      selected = clamp(time, 0, duration); desired = selected;
+      if (!isFine()) fineWindow = localRange(selected);
+      video.pause(); renderState(); flushSeek();
+    }
+    function flushCommit() {
+      if (!ready || committedVideo.readyState < 1 || committedBusy || committedVideo.seeking) return;
+      if (Math.abs(committedVideo.currentTime - committedDesired) < .003 && committedVideo.readyState >= 2) { committedActual = committedVideo.currentTime; renderState(); return; }
+      committedBusy = true;
+      try { committedVideo.currentTime = committedDesired; } catch (_) { committedBusy = false; showMediaError(); }
+    }
+    function queueCommit(time) { committedDesired = clamp(time, 0, duration); committedVideo.pause(); flushCommit(); }
+    video.addEventListener('seeked', () => {
+      if (!ready) return;
+      busy = false; actual = video.currentTime;
+      if (Math.abs(actual - desired) >= .003) flushSeek(); else { frameStatus = 'ready'; renderState(); }
+    });
+    committedVideo.addEventListener('seeked', () => { committedBusy = false; committedActual = committedVideo.currentTime; if (Math.abs(committedActual - committedDesired) >= .003) flushCommit(); renderState(); });
+    committedVideo.addEventListener('loadedmetadata', flushCommit);
+    committedVideo.addEventListener('loadeddata', flushCommit);
+    video.addEventListener('timeupdate', () => {
+      if (!ready || drag || appMode === 'study' || busy || video.seeking || condition !== 'dual') return;
+      if (!video.paused) { selected = video.currentTime; desired = selected; actual = selected; renderState(); }
+    });
+    committedVideo.addEventListener('timeupdate', () => {
+      if (!ready || drag || appMode === 'study' || committedBusy || committedVideo.seeking || condition !== 'baseline') return;
+      if (!committedVideo.paused) { committedActual = committedVideo.currentTime; committedDesired = committedActual; selected = committedActual; renderState(); }
+    });
+    for (const media of [video, committedVideo]) ['play', 'pause', 'ended'].forEach(event => media.addEventListener(event, renderState));
+    video.addEventListener('loadeddata', () => { if (ready && !busy) flushSeek(); });
+    video.addEventListener('loadedmetadata', () => {
+      if (!Number.isFinite(video.duration) || video.duration <= 0) { showMediaError(); return; }
+      if (video.videoWidth && video.videoHeight) document.querySelector('.player').style.setProperty('--media-aspect', video.videoWidth + ' / ' + video.videoHeight);
+      duration = video.duration; ready = true; frameStatus = 'ready'; busy = false; mode = 'idle';
+      selected = duration * .15; desired = selected; actual = 0; fineWindow = localRange(selected);
+      $('loadMessage').hidden = true; populateTrialDefaults(); queueCommit(selected); renderCondition(); renderStudy(); flushSeek();
+    });
+    video.addEventListener('error', showMediaError); committedVideo.addEventListener('error', showMediaError);
+    function showMediaError() {
+      interrupt('media_error'); ready = false; busy = false; committedBusy = false; frameStatus = 'error';
+      $('loadMessage').hidden = false; $('loadMessage').textContent = 'This video could not be loaded. Use "Load local video" to pick a file your browser can play.'; renderStudy();
+    }
+
+    function beginDrag(event) {
+      if (!ready || drag || event.button !== 0 || !event.isPrimary || event.pointerType !== 'mouse') return;
+      if (appMode === 'study' && !study.start()) return;
+      event.preventDefault(); video.pause(); committedVideo.pause();
+      const rect = $('seekAxis').getBoundingClientRect(), fineRect = $('fineZone').getBoundingClientRect();
+      log.begin({ participantId: $('participantId').value.trim() || 'DEMO', condition, mediaTitle: source ? source.title : 'local video', mediaDurationSec: duration, selectedTimeSec: selected });
+      mode = 'coarse'; drag = { id: event.pointerId, width: rect.width, fineTop: fineRect.top, anchorX: event.clientX, anchorTime: selected };
+      controlsActivity();
+      selectTime(clamp((event.clientX - rect.left) / rect.width, 0, 1) * duration); drag.anchorTime = selected;
+      $('seekAxis').setPointerCapture(event.pointerId); positionSmallPreview(event.clientX); renderState(); renderStrip(); if (appMode === 'study') renderStudy();
+    }
+    function moveDrag(event) {
+      if (!drag || event.pointerId !== drag.id) return;
+      event.preventDefault(); positionSmallPreview(event.clientX);
+      const nextMode = condition === 'baseline' ? 'coarse' : mode === 'coarse' && event.clientY >= drag.fineTop + 4 ? 'fine' : mode === 'fine' && event.clientY < drag.fineTop - 8 ? 'coarse' : mode;
+      if (nextMode !== mode) {
+        const previous = mode; mode = nextMode; drag.anchorX = event.clientX; drag.anchorTime = selected;
+        if (isFine()) { fineWindow = localRange(selected); renderState(); zoomInFeedback(); }
+        log.switchMode({ from: previous, to: mode });
+        renderState(); renderStrip(); return;
+      }
+      const range = isFine() ? fineWindow : { start: 0, end: duration };
+      selectTime(clamp(drag.anchorTime + (event.clientX - drag.anchorX) * (range.end - range.start) / drag.width, range.start, range.end));
+    }
+    function endInteraction(reason, event) {
+      if (!drag || (event && event.pointerId != null && event.pointerId !== drag.id)) return;
+      const pointerId = drag.id;
+      const result = { selectedTimeSec: selected, actualFrameTimeSec: actual, previewPending: previewPending(), reason };
+      drag = null; mode = 'idle'; fineWindow = localRange(selected); // Clear first: lost capture after release must not append another row.
+      controlsActivity();
+      const rawRow = reason === 'release' ? log.finish(result) : log.cancel(result);
+      if (reason === 'release') releaseFeedback();
+      if (appMode === 'study') {
+        if (reason === 'release') study.finish(trialDetails(rawRow));
+        else { invalidateStudyAsync(); study.cancel(reason, trialDetails(rawRow)); showCurtain('Trial cancelled', 'The reason was recorded; this is not counted as wrong. Press "Next trial" to continue.'); }
+      }
+      if ($('seekAxis').hasPointerCapture(pointerId)) $('seekAxis').releasePointerCapture(pointerId);
+      if (condition === 'baseline' && reason === 'release') queueCommit(selected);
+      renderRecords(); renderState(); renderStrip(); flushSeek(); if (appMode === 'study') renderStudy();
+    }
+    $('seekAxis').addEventListener('pointerdown', beginDrag);
+    $('seekAxis').addEventListener('pointermove', moveDrag);
+    $('seekAxis').addEventListener('pointerup', event => endInteraction('release', event));
+    $('seekAxis').addEventListener('pointercancel', event => endInteraction('pointercancel', event));
+    $('seekAxis').addEventListener('lostpointercapture', event => endInteraction('lostpointercapture', event));
+    window.addEventListener('blur', () => interrupt('blur'));
+    window.addEventListener('resize', () => { interrupt('resize'); renderStrip(true); positionSmallPreview(); });
+    function spriteFrame(time) {
+      if (!source || !source.sheets || !source.sheets.length) return null;
+      const interval = source.thumbInterval || 1;
+      const index = Math.max(0, Math.floor(Math.min(time, Math.max(0, duration - .001)) / interval));
+      const sheet = source.sheets.find(item => index >= item.start && index < item.start + item.count);
+      if (!sheet) return null;
+      return { sheet, index: index - sheet.start, time: index * interval };
+    }
+    function loadSprite(src) {
+      if (!spriteImages.has(src)) {
+        spriteImages.set(src, new Promise((resolve, reject) => {
+          const image = new Image(); image.onload = () => resolve(image); image.onerror = reject; image.src = src;
+        }));
+      }
+      return spriteImages.get(src);
+    }
+    function renderStrip(force = false) {
+      if (!ready) return;
+      const range = stripRange(), count = Math.max(5, Math.min(11, Math.floor($('filmstrip').clientWidth / 112)));
+      const key = mediaEpoch + ':' + range.start.toFixed(3) + ':' + range.end.toFixed(3) + ':' + count;
+      if (!force && key === stripRangeKey) return;
+      stripRangeKey = key;
+      const generation = ++stripGeneration;
+      $('stripLabel').textContent = isFine() ? 'Nearby frames' : 'Thumbnails';
+      $('stripStatus').textContent = 'Loading thumbnails…';
+      $('filmstrip').style.setProperty('--thumb-count', count);
+      $('filmstrip').replaceChildren(); stripEntries = [];
+      for (let i = 0; i < count; i++) {
+        const time = clamp(range.start + (range.end - range.start) * (i + .5) / count, 0, duration - .001);
+        const figure = document.createElement('figure'), canvas = document.createElement('canvas'), caption = document.createElement('figcaption');
+        canvas.width = 160; canvas.height = 90; caption.textContent = fmt(time);
+        figure.append(canvas, caption); $('filmstrip').append(figure);
+        stripEntries.push({ time, figure, canvas, caption });
+      }
+      if (source && source.sheets && source.sheets.length) {
+        let loaded = 0;
+        for (const entry of stripEntries) {
+          const frame = spriteFrame(entry.time);
+          if (!frame) { $('stripStatus').textContent = 'Some thumbnails missing'; continue; }
+          entry.time = frame.time; entry.caption.textContent = fmt(frame.time);
+          loadSprite(frame.sheet.src).then(image => {
+            if (generation !== stripGeneration) return;
+            const cols = source.thumbCols || 10, w = source.thumbWidth || 160, h = source.thumbHeight || 90;
+            entry.canvas.getContext('2d').drawImage(image, (frame.index % cols) * w, Math.floor(frame.index / cols) * h, w, h, 0, 0, 160, 90);
+            if (++loaded === stripEntries.length) $('stripStatus').textContent = 'Thumbnails every ' + (source.thumbInterval || 1) + ' s · main preview is the real frame';
+          }).catch(() => { if (generation === stripGeneration) $('stripStatus').textContent = 'Thumbnails failed to load; scrubbing still works'; });
+        }
+      } else {
+        thumbnailPending = { generation, epoch: mediaEpoch, entries: stripEntries.slice() };
+        runThumbnailQueue();
+      }
+      renderState();
+    }
+
+    function waitThumbnailFrame(time, epoch) {
+      return new Promise((resolve, reject) => {
+        if (epoch !== mediaEpoch) { reject(new Error('superseded')); return; }
+        let timer;
+        const cleanup = () => { clearTimeout(timer); thumbnailVideo.removeEventListener('seeked', onReady); thumbnailVideo.removeEventListener('loadeddata', onData); thumbnailVideo.removeEventListener('error', onError); };
+        const onReady = () => { cleanup(); resolve(thumbnailVideo.currentTime); };
+        const onData = () => { if (Math.abs(thumbnailVideo.currentTime - time) < .003 && !thumbnailVideo.seeking) onReady(); };
+        const onError = () => { cleanup(); reject(new Error('decode')); };
+        if (thumbnailVideo.readyState >= 2 && !thumbnailVideo.seeking && Math.abs(thumbnailVideo.currentTime - time) < .003) { resolve(thumbnailVideo.currentTime); return; }
+        thumbnailVideo.addEventListener('seeked', onReady);
+        thumbnailVideo.addEventListener('loadeddata', onData);
+        thumbnailVideo.addEventListener('error', onError);
+        timer = setTimeout(onError, 4000);
+        try { thumbnailVideo.currentTime = time; } catch (_) { onError(); }
+      });
+    }
+    async function runThumbnailQueue() {
+      if (thumbnailWorking) return;
+      thumbnailWorking = true;
+      try {
+        while (thumbnailPending) {
+          const job = thumbnailPending; thumbnailPending = null;
+          let loaded = 0;
+          for (const entry of job.entries) {
+            if (job.epoch !== mediaEpoch || job.generation !== stripGeneration) break;
+            try {
+              const time = await waitThumbnailFrame(entry.time, job.epoch);
+              if (job.epoch !== mediaEpoch || job.generation !== stripGeneration) break;
+              const context = entry.canvas.getContext('2d'), width = thumbnailVideo.videoWidth, height = thumbnailVideo.videoHeight;
+              if (!width || !height) throw new Error('decode');
+              context.fillStyle = '#000'; context.fillRect(0, 0, 160, 90);
+              const scale = Math.min(160 / width, 90 / height), dw = width * scale, dh = height * scale;
+              context.drawImage(thumbnailVideo, (160 - dw) / 2, (90 - dh) / 2, dw, dh);
+              entry.time = time; entry.caption.textContent = fmt(time); loaded++;
+              $('stripStatus').textContent = 'Extracting thumbnails ' + loaded + '/' + job.entries.length;
+            } catch (_) {
+              if (job.epoch === mediaEpoch && job.generation === stripGeneration) $('stripStatus').textContent = 'Some thumbnails could not be extracted; scrubbing still works';
+            }
+          }
+          if (job.epoch === mediaEpoch && job.generation === stripGeneration && loaded === job.entries.length) $('stripStatus').textContent = 'Local video thumbnails · main preview is the real frame';
+          renderState();
+        }
+      } finally { thumbnailWorking = false; }
+    }
+
+
+    function loadMedia(nextSource, url) {
+      endInteraction('media_change'); resetControls(); video.pause(); committedVideo.pause(); ready = false; mediaEpoch++; stripGeneration++; thumbnailPending = null;
+      source = nextSource; duration = 0; selected = 0; actual = 0; desired = 0; busy = false; committedDesired = 0; committedActual = 0; committedBusy = false; frameStatus = 'loading';
+      stripRangeKey = ''; stripEntries = []; $('filmstrip').replaceChildren();
+      $('loadMessage').hidden = false; $('loadMessage').textContent = 'Loading video…'; $('stripStatus').textContent = 'Loading thumbnails…';
+      const credit = $('mediaCredit'); credit.replaceChildren();
+      if (source && source.credit) {
+        const link = document.createElement('a'); link.textContent = source.credit.label || source.title || 'sample video'; link.href = source.credit.url; link.target = '_blank'; link.rel = 'noopener';
+        credit.append(link, document.createTextNode(' · ' + source.credit.license));
+      } else credit.textContent = 'Local video · ' + (nextSource ? nextSource.title : '') + ' · read only in this page';
+      video.src = url; video.load(); committedVideo.src = url; committedVideo.load(); thumbnailVideo.src = url; thumbnailVideo.load(); renderState();
+    }
+    $('fileButton').addEventListener('click', () => { if (!drag && appMode === 'free') $('fileInput').click(); });
+    $('fileInput').addEventListener('change', event => {
+      if (drag || appMode === 'study') { event.target.value = ''; return; }
+      const file = event.target.files[0]; if (!file) return;
+      const previousUrl = localUrl; localUrl = URL.createObjectURL(file); loadMedia({ title: file.name }, localUrl);
+      if (previousUrl) URL.revokeObjectURL(previousUrl); event.target.value = '';
+    });
+    $('playButton').addEventListener('click', () => {
+      if (!ready || drag || appMode === 'study') return;
+      const media = playbackVideo();
+      if (!media.paused) media.pause();
+      else media.play().catch(() => { $('seekMessage').hidden = false; $('seekMessage').textContent = 'This video cannot play; scrubbing still works.'; });
+    });
+    document.querySelectorAll('[data-condition-choice]').forEach(button => button.addEventListener('click', () => changeCondition(button.dataset.conditionChoice)));
+    $('seekAxis').addEventListener('keydown', event => {
+      if (appMode === 'study') { event.preventDefault(); return; }
+      if (!ready || drag) return;
+      const step = event.shiftKey ? 10 : 1; let time;
+      if (event.key === 'ArrowLeft') time = selected - step;
+      else if (event.key === 'ArrowRight') time = selected + step;
+      else if (event.key === 'Home') time = 0;
+      else if (event.key === 'End') time = duration; else return;
+      event.preventDefault(); selectTime(time); if (condition === 'baseline') queueCommit(selected); fineWindow = localRange(selected); renderState();
+    });
+    function downloadCSV(text, prefix) {
+      const url = URL.createObjectURL(new Blob([text], { type: 'text/csv;charset=utf-8' })), a = document.createElement('a');
+      a.href = url; a.download = prefix + new Date().toISOString().replace(/[:.]/g, '-') + '.csv'; document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+    $('exportButton').addEventListener('click', () => {
+      if (!drag && appMode === 'free' && log.rows().length) downloadCSV(log.toCSV(), 'SM2291-free-play-');
+    });
+    $('startStudy').addEventListener('click', beginStudy);
+    $('nextTrial').addEventListener('click', prepareNextTrial);
+    $('exitStudy').addEventListener('click', exitStudy);
+    $('exportTrials').addEventListener('click', () => {
+      if (!drag && study.rows().length && (appMode === 'free' || study.state().phase === 'finished')) downloadCSV(study.toCSV(), 'SM2291-trials-');
+    });
+    window.addEventListener('popstate', () => { if (!drag) changeCondition(new URLSearchParams(location.search).get('condition') === 'baseline' ? 'baseline' : 'dual'); });
+    renderCondition(); renderRecords(); renderStudy();
+    if (sample && sample.src) loadMedia(sample, sample.src);
+    else { $('loadMessage').textContent = 'No sample video found. Use "Load local video" to try your own.'; renderState(); }
+  })();
+  </script>
+</body>
+</html>
