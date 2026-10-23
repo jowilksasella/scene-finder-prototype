@@ -77,6 +77,16 @@
     .toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
     .toolbar-left { display: flex; align-items: center; gap: 12px; }
     #playButton { padding: 5px 14px; font-size: 12px; background: #ffffff14; border-color: transparent; }
+    .volume { display: flex; align-items: center; gap: 6px; }
+    #muteButton { width: 30px; height: 30px; padding: 0; display: grid; place-items: center; background: transparent; border-color: transparent; }
+    #muteButton svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    #muteButton .slash { display: none; }
+    #muteButton.is-muted .wave { display: none; }
+    #muteButton.is-muted .slash { display: inline; }
+    #volumeSlider { -webkit-appearance: none; appearance: none; width: 80px; height: 4px; padding: 0; border: 0; border-radius: 999px; cursor: pointer;
+      background: linear-gradient(90deg, var(--coarse) var(--level, 100%), #ffffff33 var(--level, 100%)); }
+    #volumeSlider::-webkit-slider-thumb { -webkit-appearance: none; width: 12px; height: 12px; border-radius: 50%; background: #fff; box-shadow: 0 0 8px var(--coarse-glow); }
+    #volumeSlider::-moz-range-thumb { width: 12px; height: 12px; border: 0; border-radius: 50%; background: #fff; }
     .time { font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 18px; font-weight: 600; letter-spacing: -.02em; white-space: nowrap; }
     .duration { font-size: 13px; color: var(--muted); font-weight: 400; margin-left: 4px; }
     .mode { font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--coarse); transition: color .2s; }
@@ -222,7 +232,7 @@
       </div>
       <div class="player-controls" id="playerControls">
       <div class="toolbar">
-        <div class="toolbar-left"><button id="playButton" disabled>Play</button><div class="time"><span id="selectedTime">—</span><span class="duration">/ <span id="durationTime">—</span></span></div></div>
+        <div class="toolbar-left"><button id="playButton" disabled>Play</button><div class="volume"><button id="muteButton" aria-label="Mute"><svg viewBox="0 0 24 24"><path d="M4 9h4l5-4v14l-5-4H4z"/><path class="wave" d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"/><path class="slash" d="M17 9l5 6M22 9l-5 6"/></svg></button><input id="volumeSlider" type="range" min="0" max="1" step="0.05" value="1" aria-label="Volume"></div><div class="time"><span id="selectedTime">—</span><span class="duration">/ <span id="durationTime">—</span></span></div></div>
         <span class="mode" id="modeLabel">Loading</span>
       </div>
       <div class="scrub-deck" id="scrubDeck">
@@ -290,9 +300,9 @@
   </main>
   </div>
   <video id="thumbnailVideo" muted playsinline preload="auto" hidden></video>
-  <script src="assets/media.js"></script>
-  <script src="interaction-log.js"></script>
-  <script src="trial-engine.js"></script>
+  <script src="assets/media.js?v=3"></script>
+  <script src="interaction-log.js?v=3"></script>
+  <script src="trial-engine.js?v=3"></script>
   <script>
   (() => {
     'use strict';
@@ -846,6 +856,22 @@
       const previousUrl = localUrl; localUrl = URL.createObjectURL(file); loadMedia({ title: file.name }, localUrl);
       if (previousUrl) URL.revokeObjectURL(previousUrl); event.target.value = '';
     });
+    // Volume applies to both playback videos (dual uses previewVideo, baseline uses committedVideo).
+    let muted = false;
+    function applyVolume() {
+      const level = Number($('volumeSlider').value), silent = muted || level === 0;
+      for (const media of [video, committedVideo]) { media.volume = level; media.muted = silent; }
+      $('muteButton').classList.toggle('is-muted', silent);
+      $('muteButton').setAttribute('aria-label', silent ? 'Unmute' : 'Mute');
+      $('volumeSlider').style.setProperty('--level', (silent ? 0 : level) * 100 + '%');
+    }
+    $('muteButton').addEventListener('click', () => {
+      if (muted || Number($('volumeSlider').value) === 0) { muted = false; if (Number($('volumeSlider').value) === 0) $('volumeSlider').value = '0.5'; }
+      else muted = true;
+      applyVolume();
+    });
+    $('volumeSlider').addEventListener('input', () => { muted = false; applyVolume(); });
+    applyVolume();
     $('playButton').addEventListener('click', () => {
       if (!ready || drag || appMode === 'study') return;
       const media = playbackVideo();

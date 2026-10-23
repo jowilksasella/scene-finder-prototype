@@ -10,5 +10,5 @@ Changes made for this prototype:
 - Re-encoded from 1280 x 534 to 854 x 356, H.264 (CRF 27), 24 fps, AAC 96 kbps stereo.
 - One keyframe every 24 frames (1 second) and fast-start metadata, so seeking is quick.
 - Extracted one 160 x 90 thumbnail per second (letterboxed) and packed them into
-  10 x 10 JPEG sprites: thumb-01.jpg to thumb-08.jpg (the last sheet holds 35).
+  10 x 10 JPEG sprites: tos-thumb-01.jpg to tos-thumb-08.jpg (the last sheet holds 35).
 - Full timeline kept: 734.17 seconds (12 min 14 s). Not cut, looped or stretched.
