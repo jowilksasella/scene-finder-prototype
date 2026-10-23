@@ -1,31 +1,14 @@
-WING IT! — Blender Open Movie
-Attribution: (CC) Blender Foundation | studio.blender.org
-Project: https://studio.blender.org/projects/wing-it/
-Official video: https://video.blender.org/w/pkDDcE7HiLU3UTGmRV1nJG
-Source MP4 (listed by the official video's JSON-LD contentUrl):
-https://video.blender.org/object-storage/web_videos/1be4c93c-1fd2-498d-adc7-50126823033e-480.mp4
+Tears of Steel — Blender Open Movie (2012)
+Attribution: (CC) Blender Foundation | mango.blender.org
+Project: https://mango.blender.org/
+Source file: https://download.blender.org/demo/movies/ToS/tears_of_steel_720p.mov
 
-License: Creative Commons Attribution 4.0 International (CC BY 4.0)
-Publisher licensing: https://studio.blender.org/projects/wing-it/pages/licensing/
-License text: https://creativecommons.org/licenses/by/4.0/
+License: Creative Commons Attribution 3.0 (CC BY 3.0)
+License text: https://creativecommons.org/licenses/by/3.0/
 
-Local modifications for the exploratory comparison prototype:
-- Re-encoded the full 854 x 480 video as H.264, yuv420p, 24 fps, CRF 23.
-- Removed audio; kept the complete original visual timeline.
-- Added regular 24-frame / 1-second keyframes and MP4 fast-start metadata for seeking.
-- Extracted one 160 x 90 thumbnail at each integer second from 0 to 237.
-- Packed thumbnails in row-major 10-column x 10-row JPEG sprites.
-- Last sprite contains 38 real thumbnails; the remaining 62 cells are blank.
-
-Measured duration (ffprobe): 237.916667 seconds (approximately 3 min 58 sec).
-This is a true short film, not a 60-minute film. It has not been looped or stretched.
-It is only a sample for testing the candidate interactions; formal coursework material
-and the final interaction design have not been selected by the user.
-
-Sprite contract:
-thumb-01.jpg: start 0 seconds; count 100.
-thumb-02.jpg: start 100 seconds; count 100.
-thumb-03.jpg: start 200 seconds; count 38.
-Each sheet is 1600 x 900 pixels. Each cell is 160 x 90 pixels.
-Sprite paths and sample.mp4 in media.js are relative to index.html.
-Main seeking preview must use sample.mp4, not a sparse thumbnail cell.
+Changes made for this prototype:
+- Re-encoded from 1280 x 534 to 854 x 356, H.264 (CRF 27), 24 fps, AAC 96 kbps stereo.
+- One keyframe every 24 frames (1 second) and fast-start metadata, so seeking is quick.
+- Extracted one 160 x 90 thumbnail per second (letterboxed) and packed them into
+  10 x 10 JPEG sprites: thumb-01.jpg to thumb-08.jpg (the last sheet holds 35).
+- Full timeline kept: 734.17 seconds (12 min 14 s). Not cut, looped or stretched.
